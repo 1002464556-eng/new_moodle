@@ -49,19 +49,6 @@ def get_image_base64(image_path):
     except:
         return None
 
-# משיכת יעד דינמי מקובץ טקסט (אם קיים)
-def get_dynamic_target():
-    target_text = "יעד מחוזי לחודש מרץ: 95% ביצוע | 17 משימות מתמטיקה | 8 משימות מדעים" # ברירת מחדל
-    txt_files = [f for f in os.listdir('.') if f.endswith('.txt')]
-    if txt_files:
-        try:
-            with open(txt_files[0], 'r', encoding='utf-8') as f:
-                content = f.read().strip()
-                if content:
-                    target_text = content
-        except:
-            pass
-    return target_text
 
 # ==================== טעינת ועיבוד הנתונים ====================
 @st.cache_data
