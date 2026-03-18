@@ -49,7 +49,6 @@ def get_image_base64(image_path):
     except:
         return None
 
-
 # ==================== טעינת ועיבוד הנתונים ====================
 @st.cache_data
 def load_and_process_data():
@@ -91,7 +90,7 @@ def load_and_process_data():
         res['שם מפקח'] = df[col_sup].astype(str).str.strip() if col_sup else 'לא ידוע'
         res['תחום'] = domain
         res['ממוצע משימות'] = pd.to_numeric(df[col_avg], errors='coerce').fillna(0).round(2) if col_avg else 0.0
-        res['filename'] = f # שמירת שם הקובץ לטובת מיון
+        res['filename'] = f 
         model_frames.append(res)
             
     df_latest = pd.concat(model_frames, ignore_index=True) if model_frames else pd.DataFrame()
@@ -161,9 +160,8 @@ logo_base64 = get_image_base64('image_5e4888.png')
 if logo_base64:
     st.markdown(f'<img src="data:image/png;base64,{logo_base64}" style="max-height: 80px; float: right; margin-left: 20px;">', unsafe_allow_html=True)
 
-# כותרת ראשית מדויקת ויעד דינמי
+# כותרת ראשית 
 st.title("ישראל ראלית משימות מודל לכיתה ז")
-st.markdown(f"**{get_dynamic_target()}**")
 st.divider()
 
 if df_latest.empty:
@@ -221,7 +219,7 @@ if supervisor:
     st.divider()
 
     # --- רובריקה 3: התערבות דחופה (סינון מתחת ל-50%) ---
-    st.header("🚨 מוקדי התערבות דחופים (ביצוע מתחת ל-50%)")
+    st.header("🚨 מוקדי התערבות דחופים (סטטוס תלמידים פעילים- מתחת ל-50%)")
     
     if not df_urg_dist.empty and 'שם מפקח' in df_urg_dist.columns:
         df_urg_sup = df_urg_dist[df_urg_dist['שם מפקח'] == supervisor]
