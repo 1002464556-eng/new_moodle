@@ -4,9 +4,9 @@ import plotly.express as px
 import os
 import re
 
-# 4. כותרת הדשבורד הרשמית
 st.set_page_config(page_title="ישראל ראלית - מחוז והעיר ירושלים", layout="wide", page_icon="🇮🇱")
 COLOR_MAP = {'מתמטיקה': '#E63946', 'מדעים': '#1D3557'}
+TARGETS = {'מתמטיקה': 17.0, 'מדעים': 8.0}
 
 def safe_read_file(filepath):
     if filepath.endswith('.xlsx'):
@@ -31,7 +31,8 @@ def load_and_process_data():
                 extracted = df_ex[col].astype(str).str.extract(r'(\d{6})')[0].dropna().tolist()
                 if extracted: excluded_ids.extend(extracted)
 
-    def process_df(filepath, domain, file_type):
+    # 1. עיבוד קבצי המודל (היסטוריה ותמונת מצב)
+    def process_model_df(filepath, domain):
         df = safe_read_file(filepath)
         if df.empty: return None
 
@@ -47,40 +48,29 @@ def load_and_process_data():
         df['סמל מוסד'] = df[col_school].astype(str).str.extract(r'(\d{6})')[0]
         df = df.dropna(subset=['סמל מוסד'])
         df = df[~df['סמל מוסד'].isin(excluded_ids)]
-        df['מוסד_נקי'] = df[col_school].astype(str).str.replace(r'^\d{6}\s*-\s*', '', regex=True)
-
+        
         res = pd.DataFrame()
         res['סמל מוסד'] = df['סמל מוסד']
-        res['מוסד'] = df['מוסד_נקי']
+        res['מוסד'] = df[col_school].astype(str).str.replace(r'^\d{6}\s*-\s*', '', regex=True)
         res['מחוז תקשוב'] = df[col_dist].astype(str).str.strip() if col_dist else 'לא ידוע'
         res['שם מפקח'] = df[col_sup].astype(str).str.strip() if col_sup else 'לא ידוע'
+        res['תחום'] = domain
+        res['ממוצע משימות'] = pd.to_numeric(df[col_avg], errors='coerce').fillna(0).round(2) if col_avg else 0.0
         
-        col_domain = next((c for c in df.columns if 'תחום' in c), None)
-        if domain:
-            res['תחום'] = domain
-        elif col_domain:
-            res['תחום'] = df[col_domain].astype(str).str.strip()
-        elif 'Unnamed: 3' in df.columns and df['Unnamed: 3'].astype(str).str.contains('מדעים|מתמטיקה').any():
-            # מנגנון חכם לחילוץ התחום מקובץ ללא קורסים כשאין כותרת לעמודה!
-            res['תחום'] = df['Unnamed: 3'].astype(str).str.strip()
-        else:
-            res['תחום'] = 'כללי'
+        # חישוב אחוז ביצוע ליצירת גרף יחסי
+        target = TARGETS[domain]
+        res['אחוז ביצוע מהיעד'] = (res['ממוצע משימות'] / target * 100).round(1)
         
-        if file_type == 'מודל':
-            res['ממוצע משימות'] = pd.to_numeric(df[col_avg], errors='coerce').fillna(0).round(2) if col_avg else 0.0
-            filename_no_ext = os.path.splitext(os.path.basename(filepath))[0]
-            period = re.sub(r'(מודל|ללא קורסים|מתמטיקה|מדעים)', '', filename_no_ext).strip()
-            res['תקופה'] = period if period else 'נוכחי'
+        filename_no_ext = os.path.splitext(os.path.basename(filepath))[0]
+        period = re.sub(r'(מודל|מתמטיקה|מדעים)', '', filename_no_ext).strip()
+        res['תקופה'] = period if period else 'נוכחי'
             
         return res
 
     hist_frames = []
-    for f in sorted([f for f in all_files if 'מודל' in f and 'מתמטיקה' in f]):
-        df = process_df(f, 'מתמטיקה', 'מודל')
-        if df is not None: hist_frames.append(df)
-        
-    for f in sorted([f for f in all_files if 'מודל' in f and 'מדעים' in f]):
-        df = process_df(f, 'מדעים', 'מודל')
+    for f in sorted([f for f in all_files if 'מודל' in f]):
+        domain = 'מתמטיקה' if 'מתמטיקה' in f else ('מדעים' if 'מדעים' in f else 'כללי')
+        df = process_model_df(f, domain)
         if df is not None: hist_frames.append(df)
         
     df_history = pd.concat(hist_frames, ignore_index=True) if hist_frames else pd.DataFrame()
@@ -89,29 +79,64 @@ def load_and_process_data():
     if not df_history.empty:
         df_latest = df_history.sort_values('תקופה').drop_duplicates(subset=['סמל מוסד', 'תחום'], keep='last')
 
-    nc_frames = []
-    nc_files = [f for f in all_files if 'ללא' in f]
-    
-    for f in sorted(nc_files):
-        domain_guess = 'מתמטיקה' if 'מתמטיקה' in f else ('מדעים' if 'מדעים' in f else None)
-        df_nc = process_df(f, domain_guess, 'ללא_קורסים')
-        if df_nc is not None: nc_frames.append(df_nc)
-        
-    df_no_courses = pd.concat(nc_frames, ignore_index=True) if nc_frames else pd.DataFrame()
-    if not df_no_courses.empty:
-        df_no_courses = df_no_courses.drop_duplicates(subset=['סמל מוסד', 'תחום'], keep='last')
+    # 2. עיבוד קבצי התפעולי (למציאת מוסדות ללא קורסים)
+    op_frames = []
+    for f in all_files:
+        if 'תפעולי' in f:
+            domain = 'מתמטיקה' if 'מתמטיקה' in f else ('מדעים' if 'מדעים' in f else 'כללי')
+            df_op = safe_read_file(f)
+            if df_op.empty: continue
+            
+            col_school = next((c for c in df_op.columns if 'מוסד' in c), None)
+            col_dist = next((c for c in df_op.columns if 'מחוז' in c), None)
+            col_sup = next((c for c in df_op.columns if 'מפקח' in c), None)
+            col_courses = next((c for c in df_op.columns if 'קורסים שנפתחו' in c), None)
+            
+            if not col_school or not col_courses: continue
+            
+            df_op['סמל מוסד'] = df_op[col_school].astype(str).str.extract(r'(\d{6})')[0]
+            df_op = df_op.dropna(subset=['סמל מוסד'])
+            df_op = df_op[~df_op['סמל מוסד'].isin(excluded_ids)]
+            df_op['מוסד_נקי'] = df_op[col_school].astype(str).str.replace(r'^\d{6}\s*-\s*', '', regex=True)
+            df_op['קורסים_num'] = pd.to_numeric(df_op[col_courses], errors='coerce').fillna(0)
+            
+            # קיבוץ לפי בית ספר - האם פתח קורסים בכלל הכיתות?
+            grouped = df_op.groupby(['סמל מוסד', 'מוסד_נקי']).agg({
+                'קורסים_num': 'sum',
+                col_dist: 'first',
+                col_sup: 'first'
+            }).reset_index()
+            
+            # שואבים רק מוסדות שסך הקורסים שלהם הוא 0
+            zeros = grouped[grouped['קורסים_num'] == 0].copy()
+            if not zeros.empty:
+                zeros['תחום'] = domain
+                zeros.rename(columns={col_dist: 'מחוז תקשוב', col_sup: 'שם מפקח', 'מוסד_נקי': 'מוסד'}, inplace=True)
+                op_frames.append(zeros)
 
-    return df_history, df_latest, df_no_courses
+    df_urgent = pd.concat(op_frames, ignore_index=True) if op_frames else pd.DataFrame()
+    if not df_urgent.empty:
+        df_urgent = df_urgent.drop_duplicates(subset=['סמל מוסד', 'תחום'])
 
-df_history, df_latest, df_no_courses = load_and_process_data()
+    return df_history, df_latest, df_urgent
 
-# ==================== בניית ממשק המשתמש ====================
+df_history, df_latest, df_urgent = load_and_process_data()
+
+# ==================== פונקציית בדיקת התקדמות ====================
+def has_progress(df_trend):
+    """ בודקת אם יש שינוי בנתונים בין התקופות השונות """
+    if df_trend['תקופה'].nunique() <= 1: return True
+    # חישוב ההפרש בין המקסימום למינימום של כל תחום
+    diff_sum = df_trend.groupby('תחום')['ממוצע משימות'].apply(lambda x: x.max() - x.min()).sum()
+    return diff_sum > 0
+
+# ==================== ממשק המשתמש ====================
 st.title("🇮🇱 ישראל ראלית - מחוז והעיר ירושלים")
 st.markdown("#### משימות מודל - כיתה ז'")
 st.divider()
 
 if df_latest.empty:
-    st.error("🚨 לא נמצאו קבצי מודל. ודאי שהעלית קבצים בשם 'מודל מתמטיקה [תאריך].csv' וכו'.")
+    st.error("🚨 לא נמצאו קבצי מודל תקינים.")
     st.stop()
 
 valid_districts = df_latest[df_latest['מחוז תקשוב'] != 'לא ידוע']['מחוז תקשוב'].dropna().unique()
@@ -124,7 +149,7 @@ if not district:
 
 df_lat_dist = df_latest[df_latest['מחוז תקשוב'] == district]
 df_hist_dist = df_history[df_history['מחוז תקשוב'] == district]
-df_nc_dist = df_no_courses[df_no_courses['מחוז תקשוב'] == district] if not df_no_courses.empty else pd.DataFrame()
+df_urg_dist = df_urgent[df_urgent['מחוז תקשוב'] == district] if not df_urgent.empty else pd.DataFrame()
 
 # --- רובריקה 1: מאקרו מחוז ---
 st.header(f"📌 תמונת מצב עדכנית - מחוז {district}")
@@ -149,20 +174,25 @@ if supervisor:
     df_lat_sup = df_lat_dist[df_lat_dist['שם מפקח'] == supervisor]
     df_hist_sup = df_hist_dist[df_hist_dist['שם מפקח'] == supervisor]
     
-    # 2. גרף מפקח מופיע בכל מקרה (גם לנקודת זמן אחת!)
+    # גרף מפקח (עם נירמול ליחסיות ובדיקת קיפאון)
     if not df_hist_sup.empty:
-        trend_sup = df_hist_sup.groupby(['תקופה', 'תחום'])['ממוצע משימות'].mean().reset_index()
-        trend_sup = trend_sup.sort_values('תקופה') 
+        trend_sup = df_hist_sup.groupby(['תקופה', 'תחום']).agg({'ממוצע משימות': 'mean', 'אחוז ביצוע מהיעד': 'mean'}).reset_index()
+        trend_sup = trend_sup.sort_values('תקופה')
         
-        fig_sup = px.line(trend_sup, x='תקופה', y='ממוצע משימות', color='תחום', markers=True,
-                          title=f"📊 מגמת התקדמות - ממוצע כלל בתי הספר (מפקח/ת: {supervisor})",
-                          color_discrete_map=COLOR_MAP)
-        fig_sup.update_traces(mode='lines+markers') # מבטיח שיופיע גם אם יש רק נקודה אחת
-        fig_sup.update_layout(xaxis_title="תאריך/תקופה", yaxis_title="ממוצע משימות")
-        st.plotly_chart(fig_sup, use_container_width=True)
+        if trend_sup['תקופה'].nunique() > 1 and not has_progress(trend_sup):
+            st.warning("לא בוצעה פעילות מה16.03")
+        else:
+            fig_sup = px.line(trend_sup, x='תקופה', y='אחוז ביצוע מהיעד', color='תחום', markers=True,
+                              title=f"📊 התקדמות יחסית ליעד (מפקח/ת: {supervisor})",
+                              hover_data=['ממוצע משימות'],
+                              color_discrete_map=COLOR_MAP)
+            fig_sup.update_traces(mode='lines+markers')
+            fig_sup.update_layout(yaxis_title="אחוז ביצוע מהיעד (%)")
+            fig_sup.update_yaxes(matches=None, autorange=True) # משחרר את הציר כדי שהשיפועים יבלטו לעין
+            st.plotly_chart(fig_sup, use_container_width=True)
     
     # טבלאות רמזור
-    st.markdown("### 📋 סטטוס עדכני - פירוט מוסדות (שיטת הרמזור)")
+    st.markdown("### 📋 סטטוס עדכני - פירוט מוסדות")
     def style_row(row, domain):
         val = row['ממוצע משימות']
         if pd.isna(val): return [''] * len(row)
@@ -180,18 +210,18 @@ if supervisor:
 
     st.divider()
 
-    # --- רובריקה 3: התערבות דחופה (הורדת הסוגריים) ---
+    # --- רובריקה 3: התערבות דחופה ---
     st.header("🚨 מוקדי התערבות דחופים")
-    if not df_nc_dist.empty:
-        df_nc_sup = df_nc_dist[df_nc_dist['שם מפקח'] == supervisor]
-        if not df_nc_sup.empty:
-            df_nc_unique = df_nc_sup[['סמל מוסד', 'מוסד', 'תחום']].drop_duplicates().sort_values('תחום')
-            st.warning(f"המפקח/ת {supervisor} אחראי/ת על {len(df_nc_unique)} מוסדות שטרם פתחו קורסי מודל.")
-            st.dataframe(df_nc_unique, hide_index=True, use_container_width=True)
+    if not df_urg_dist.empty:
+        df_urg_sup = df_urg_dist[df_urg_dist['שם מפקח'] == supervisor]
+        if not df_urg_sup.empty:
+            df_urg_unique = df_urg_sup[['סמל מוסד', 'מוסד', 'תחום']].sort_values('תחום')
+            st.warning(f"המפקח/ת {supervisor} אחראי/ת על {len(df_urg_unique)} מוסדות שטרם פתחו קורסי מודל.")
+            st.dataframe(df_urg_unique, hide_index=True, use_container_width=True)
         else:
             st.success("אין מוסדות ללא קורסים באחריות מפקח זה. מצוין!")
     else:
-        st.info("לא נמצאו נתונים מקובץ 'ללא קורסים'. ודאי שהקובץ עלה בהצלחה ל-GitHub.")
+        st.info("קובץ תפעולי לא הניב תוצאות חריגות (כל בתי הספר פתחו קורסים).")
 
     st.divider()
 
@@ -203,9 +233,15 @@ if supervisor:
         
         if selected_school:
             df_school = df_hist_sup[df_hist_sup['מוסד'] == selected_school].sort_values('תקופה')
-            fig_sch = px.line(df_school, x='תקופה', y='ממוצע משימות', color='תחום', markers=True,
-                              title=f"📈 מעקב התקדמות - {selected_school}",
-                              color_discrete_map=COLOR_MAP)
-            fig_sch.update_traces(mode='lines+markers') # מבטיח שיופיע גם אם יש רק נקודה אחת
-            fig_sch.update_layout(xaxis_title="תאריך/תקופה", yaxis_title="ממוצע משימות")
-            st.plotly_chart(fig_sch, use_container_width=True)
+            
+            if df_school['תקופה'].nunique() > 1 and not has_progress(df_school):
+                st.warning("לא בוצעה שום פעילות מ16.03")
+            else:
+                fig_sch = px.line(df_school, x='תקופה', y='אחוז ביצוע מהיעד', color='תחום', markers=True,
+                                  title=f"📈 מעקב התקדמות יחסית - {selected_school}",
+                                  hover_data=['ממוצע משימות'],
+                                  color_discrete_map=COLOR_MAP)
+                fig_sch.update_traces(mode='lines+markers')
+                fig_sch.update_layout(yaxis_title="אחוז ביצוע מהיעד (%)")
+                fig_sch.update_yaxes(matches=None, autorange=True) # משחרר את הציר כדי להבליט שינויים
+                st.plotly_chart(fig_sch, use_container_width=True)
