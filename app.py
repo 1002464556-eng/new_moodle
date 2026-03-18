@@ -184,11 +184,11 @@ col1, col2 = st.columns(2)
 with col1:
     math_avg = df_lat_dist[df_lat_dist['תחום'] == 'מתמטיקה']['ממוצע משימות'].mean()
     st.markdown("<h3 class='math-title'>📐 מתמטיקה</h3>", unsafe_allow_html=True)
-    st.metric("ממוצע משימות רשותי", f"{math_avg:.1f}" if pd.notna(math_avg) else "0.0")
+    st.metric("ממוצע משימות מחוזי", f"{math_avg:.1f}" if pd.notna(math_avg) else "0.0")
 with col2:
     sci_avg = df_lat_dist[df_lat_dist['תחום'] == 'מדעים']['ממוצע משימות'].mean()
     st.markdown("<h3 class='sci-title'>🔬 מדעים</h3>", unsafe_allow_html=True)
-    st.metric("ממוצע משימות רשותי", f"{sci_avg:.1f}" if pd.notna(sci_avg) else "0.0")
+    st.metric("ממוצע משימות מחוזי", f"{sci_avg:.1f}" if pd.notna(sci_avg) else "0.0")
 st.divider()
 
 # --- רובריקה 2: מפקחים ורמזור ---
