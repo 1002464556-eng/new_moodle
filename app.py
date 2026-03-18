@@ -3,11 +3,46 @@ import pandas as pd
 import plotly.express as px
 import os
 import re
+import base64
 
-st.set_page_config(page_title="ישראל ראלית - מחוז והעיר ירושלים", layout="wide", page_icon="🇮🇱")
+# ==================== הגדרות עמוד ועיצוב ====================
+st.set_page_config(page_title="מערכת בינה עסקית (BI) - משימות מודל", layout="wide", page_icon="📊")
+
+# עיצוב מותאם אישית (CSS) - רקע ממלכתי, יישור לימין, ועיצוב כרטיסיות
+st.markdown("""
+<style>
+    /* רקע כללי בסגנון ישראל ראלית / משרד החינוך */
+    .stApp {
+        background: linear-gradient(180deg, #f0f4f8 0%, #e0e8f0 100%);
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    /* יישור לימין של כל האפליקציה */
+    * { direction: rtl; text-align: right; }
+    
+    /* עיצוב כותרות וכרטיסיות נתונים (Metrics) */
+    div[data-testid="metric-container"] {
+        background-color: white;
+        border: 1px solid #d1d5db;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        border-right: 5px solid #1D3557;
+    }
+    /* צבעים ייעודיים למתמטיקה ולמדעים */
+    .math-title { color: #E63946; font-weight: bold; }
+    .sci-title { color: #1D3557; font-weight: bold; }
+    
+    /* הסתרת אלמנטים מיותרים של Streamlit */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# קבועים
 COLOR_MAP = {'מתמטיקה': '#E63946', 'מדעים': '#1D3557'}
 TARGETS = {'מתמטיקה': 17.0, 'מדעים': 8.0}
 
+# ==================== פונקציות עזר ====================
 def safe_read_file(filepath):
     if filepath.endswith('.xlsx'):
         try: return pd.read_excel(filepath, engine='openpyxl')
@@ -18,10 +53,19 @@ def safe_read_file(filepath):
             except: continue
     return pd.DataFrame()
 
+def get_image_base64(image_path):
+    try:
+        with open(image_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode()
+    except:
+        return None
+
+# ==================== טעינת ועיבוד הנתונים ====================
 @st.cache_data
 def load_and_process_data():
     all_files = os.listdir('.')
     
+    # טעינת קובץ החרגות
     exc_file = next((f for f in all_files if 'להחרגה' in f), None)
     excluded_ids = []
     if exc_file:
@@ -31,13 +75,12 @@ def load_and_process_data():
                 extracted = df_ex[col].astype(str).str.extract(r'(\d{6})')[0].dropna().tolist()
                 if extracted: excluded_ids.extend(extracted)
 
-    # 1. עיבוד קבצי המודל (היסטוריה ותמונת מצב)
+    # 1. עיבוד קבצי המודל (היסטוריה)
     def process_model_df(filepath, domain):
         df = safe_read_file(filepath)
         if df.empty: return None
 
         df.columns = df.columns.astype(str).str.strip()
-        
         col_school = next((c for c in df.columns if 'מוסד' in c and 'סמל' not in c), None) or next((c for c in df.columns if 'מוסד' in c), None)
         col_dist = next((c for c in df.columns if 'מחוז' in c), None)
         col_sup = next((c for c in df.columns if 'מפקח' in c), None)
@@ -56,14 +99,12 @@ def load_and_process_data():
         res['שם מפקח'] = df[col_sup].astype(str).str.strip() if col_sup else 'לא ידוע'
         res['תחום'] = domain
         res['ממוצע משימות'] = pd.to_numeric(df[col_avg], errors='coerce').fillna(0).round(2) if col_avg else 0.0
-        
-        # חישוב אחוז ביצוע ליצירת גרף יחסי
-        target = TARGETS[domain]
-        res['אחוז ביצוע מהיעד'] = (res['ממוצע משימות'] / target * 100).round(1)
+        res['אחוז ביצוע מהיעד'] = (res['ממוצע משימות'] / TARGETS[domain] * 100).round(1)
         
         filename_no_ext = os.path.splitext(os.path.basename(filepath))[0]
-        period = re.sub(r'(מודל|מתמטיקה|מדעים)', '', filename_no_ext).strip()
-        res['תקופה'] = period if period else 'נוכחי'
+        # חילוץ התאריך מהשם (לדוגמה מ"מודל מתמטיקה 16.03" חלץ "16.03")
+        period_match = re.search(r'(\d{1,2}\.\d{1,2})', filename_no_ext)
+        res['תקופה'] = period_match.group(1) if period_match else filename_no_ext
             
         return res
 
@@ -74,12 +115,11 @@ def load_and_process_data():
         if df is not None: hist_frames.append(df)
         
     df_history = pd.concat(hist_frames, ignore_index=True) if hist_frames else pd.DataFrame()
-    
     df_latest = pd.DataFrame()
     if not df_history.empty:
         df_latest = df_history.sort_values('תקופה').drop_duplicates(subset=['סמל מוסד', 'תחום'], keep='last')
 
-    # 2. עיבוד קבצי התפעולי (למציאת מוסדות ללא קורסים)
+    # 2. עיבוד קבצי התפעולי (מוקדי התערבות - ללא קורסים)
     op_frames = []
     for f in all_files:
         if 'תפעולי' in f:
@@ -100,14 +140,12 @@ def load_and_process_data():
             df_op['מוסד_נקי'] = df_op[col_school].astype(str).str.replace(r'^\d{6}\s*-\s*', '', regex=True)
             df_op['קורסים_num'] = pd.to_numeric(df_op[col_courses], errors='coerce').fillna(0)
             
-            # קיבוץ לפי בית ספר - האם פתח קורסים בכלל הכיתות?
             grouped = df_op.groupby(['סמל מוסד', 'מוסד_נקי']).agg({
                 'קורסים_num': 'sum',
                 col_dist: 'first',
                 col_sup: 'first'
             }).reset_index()
             
-            # שואבים רק מוסדות שסך הקורסים שלהם הוא 0
             zeros = grouped[grouped['קורסים_num'] == 0].copy()
             if not zeros.empty:
                 zeros['תחום'] = domain
@@ -122,29 +160,33 @@ def load_and_process_data():
 
 df_history, df_latest, df_urgent = load_and_process_data()
 
-# ==================== פונקציית בדיקת התקדמות ====================
-def has_progress(df_trend):
-    """ בודקת אם יש שינוי בנתונים בין התקופות השונות """
-    if df_trend['תקופה'].nunique() <= 1: return True
-    # חישוב ההפרש בין המקסימום למינימום של כל תחום
+# בדיקת התקדמות
+def get_progress_status(df_trend):
+    if df_trend['תקופה'].nunique() <= 1: return "SINGLE_POINT"
+    # בודק אם סכום ההפרשים בין המקסימום למינימום לאורך התקופות הוא 0
     diff_sum = df_trend.groupby('תחום')['ממוצע משימות'].apply(lambda x: x.max() - x.min()).sum()
-    return diff_sum > 0
+    return "NO_PROGRESS" if diff_sum == 0 else "PROGRESS"
 
-# ==================== ממשק המשתמש ====================
-st.title("🇮🇱 ישראל ראלית - מחוז והעיר ירושלים")
-st.markdown("#### משימות מודל - כיתה ז'")
+# ==================== עיצוב ממשק המשתמש ====================
+
+# הטמעת לוגו
+logo_base64 = get_image_base64('image_5e4888.png')
+if logo_base64:
+    st.markdown(f'<img src="data:image/png;base64,{logo_base64}" style="max-height: 80px; float: right; margin-left: 20px;">', unsafe_allow_html=True)
+
+st.title("מערכת בינה עסקית (BI) - משימות מודל")
+st.markdown(f"**יעד מחוזי לחודש מרץ: 95% ביצוע | {int(TARGETS['מתמטיקה'])} משימות מתמטיקה | {int(TARGETS['מדעים'])} משימות מדעים**")
 st.divider()
 
 if df_latest.empty:
-    st.error("🚨 לא נמצאו קבצי מודל תקינים.")
+    st.error("🚨 לא נמצאו נתוני מודל תקינים להצגה.")
     st.stop()
 
 valid_districts = df_latest[df_latest['מחוז תקשוב'] != 'לא ידוע']['מחוז תקשוב'].dropna().unique()
 district_list = sorted([str(d) for d in valid_districts])
-district = st.sidebar.selectbox("בחר/י מחוז:", district_list) if district_list else ""
+district = st.sidebar.selectbox("בחר/י מחוז (מומלץ: העיר ירושלים):", district_list) if district_list else ""
 
 if not district:
-    st.info("אנא בחר/י מחוז מהתפריט בצד.")
     st.stop()
 
 df_lat_dist = df_latest[df_latest['מחוז תקשוב'] == district]
@@ -152,20 +194,20 @@ df_hist_dist = df_history[df_history['מחוז תקשוב'] == district]
 df_urg_dist = df_urgent[df_urgent['מחוז תקשוב'] == district] if not df_urgent.empty else pd.DataFrame()
 
 # --- רובריקה 1: מאקרו מחוז ---
-st.header(f"📌 תמונת מצב עדכנית - מחוז {district}")
+st.header(f"תמונת מצב עדכנית - מחוז {district}")
 col1, col2 = st.columns(2)
 with col1:
     math_avg = df_lat_dist[df_lat_dist['תחום'] == 'מתמטיקה']['ממוצע משימות'].mean()
-    st.markdown(f"<h3 style='color:{COLOR_MAP['מתמטיקה']};'>📐 מתמטיקה</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 class='math-title'>📐 מתמטיקה</h3>", unsafe_allow_html=True)
     st.metric("ממוצע משימות רשותי", f"{math_avg:.1f}" if pd.notna(math_avg) else "0.0")
 with col2:
     sci_avg = df_lat_dist[df_lat_dist['תחום'] == 'מדעים']['ממוצע משימות'].mean()
-    st.markdown(f"<h3 style='color:{COLOR_MAP['מדעים']};'>🔬 מדעים</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 class='sci-title'>🔬 מדעים</h3>", unsafe_allow_html=True)
     st.metric("ממוצע משימות רשותי", f"{sci_avg:.1f}" if pd.notna(sci_avg) else "0.0")
 st.divider()
 
 # --- רובריקה 2: מפקחים ורמזור ---
-st.header("👥 ניתוח ביצועים לפי מפקח/ת")
+st.header("ניתוח ביצועים לפי מפקח/ת")
 valid_sups = df_lat_dist[df_lat_dist['שם מפקח'] != 'לא ידוע']['שם מפקח'].dropna().unique()
 supervisors = sorted([str(s) for s in valid_sups])
 supervisor = st.selectbox("בחר/י מפקח/ת:", supervisors) if supervisors else ""
@@ -174,59 +216,63 @@ if supervisor:
     df_lat_sup = df_lat_dist[df_lat_dist['שם מפקח'] == supervisor]
     df_hist_sup = df_hist_dist[df_hist_dist['שם מפקח'] == supervisor]
     
-    # גרף מפקח (עם נירמול ליחסיות ובדיקת קיפאון)
+    # גרף מפקח
     if not df_hist_sup.empty:
         trend_sup = df_hist_sup.groupby(['תקופה', 'תחום']).agg({'ממוצע משימות': 'mean', 'אחוז ביצוע מהיעד': 'mean'}).reset_index()
         trend_sup = trend_sup.sort_values('תקופה')
         
-        if trend_sup['תקופה'].nunique() > 1 and not has_progress(trend_sup):
-            st.warning("לא בוצעה פעילות מה16.03")
+        status = get_progress_status(trend_sup)
+        if status == "SINGLE_POINT":
+            st.info("קיימת רק נקודת זמן אחת למוסד/מפקח זה. ברגע שתעלי קבצים נוספים בעתיד, יופיע כאן קו מגמה.")
+        elif status == "NO_PROGRESS":
+            st.warning("לא בוצעה פעילות מה16.03") # הטקסט המדויק למפקח
         else:
             fig_sup = px.line(trend_sup, x='תקופה', y='אחוז ביצוע מהיעד', color='תחום', markers=True,
-                              title=f"📊 התקדמות יחסית ליעד (מפקח/ת: {supervisor})",
-                              hover_data=['ממוצע משימות'],
+                              title=f"התקדמות יחסית ליעד (%) - מפקח/ת: {supervisor}",
+                              hover_data={'ממוצע משימות': True, 'אחוז ביצוע מהיעד': ':.1f'},
                               color_discrete_map=COLOR_MAP)
-            fig_sup.update_traces(mode='lines+markers')
-            fig_sup.update_layout(yaxis_title="אחוז ביצוע מהיעד (%)")
-            fig_sup.update_yaxes(matches=None, autorange=True) # משחרר את הציר כדי שהשיפועים יבלטו לעין
+            fig_sup.update_traces(mode='lines+markers', line=dict(width=3), marker=dict(size=8))
+            fig_sup.update_layout(yaxis_title="אחוז ביצוע מהיעד (%)", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+            fig_sup.update_yaxes(matches=None, autorange=True, gridcolor='lightgrey') 
             st.plotly_chart(fig_sup, use_container_width=True)
     
     # טבלאות רמזור
-    st.markdown("### 📋 סטטוס עדכני - פירוט מוסדות")
+    st.markdown("### סטטוס עדכני - פירוט מוסדות (שיטת הרמזור)")
     def style_row(row, domain):
         val = row['ממוצע משימות']
         if pd.isna(val): return [''] * len(row)
-        if domain == 'מתמטיקה': color = '#ffcccc' if val < 5 else ('#ffffcc' if val < 12 else '#ccffcc')
-        else: color = '#ffcccc' if val < 2 else ('#ffffcc' if val < 6 else '#ccffcc')
-        return [f'background-color: {color}; color: black;' if col in ['מוסד', 'ממוצע משימות'] else '' for col in row.index]
+        # צבעי פסטל רכים יותר למראה יוקרתי
+        if domain == 'מתמטיקה': color = '#fad2e1' if val < 5 else ('#fefae0' if val < 12 else '#d8f3dc')
+        else: color = '#fad2e1' if val < 2 else ('#fefae0' if val < 6 else '#d8f3dc')
+        return [f'background-color: {color}; color: #333;' if col in ['מוסד', 'ממוצע משימות'] else '' for col in row.index]
 
-    t1, t2 = st.tabs(["📐 מתמטיקה", "🔬 מדעים"])
+    t1, t2 = st.tabs(["מתמטיקה", "מדעים"])
     with t1:
-        d_m = df_lat_sup[df_lat_sup['תחום'] == 'מתמטיקה'][['סמל מוסד', 'מוסד', 'ממוצע משימות']].sort_values('ממוצע משימות')
+        d_m = df_lat_sup[df_lat_sup['תחום'] == 'מתמטיקה'][['סמל מוסד', 'מוסד', 'ממוצע משימות']].sort_values('ממוצע משימות', ascending=False)
         if not d_m.empty: st.dataframe(d_m.style.apply(style_row, domain='מתמטיקה', axis=1), use_container_width=True, hide_index=True)
     with t2:
-        d_s = df_lat_sup[df_lat_sup['תחום'] == 'מדעים'][['סמל מוסד', 'מוסד', 'ממוצע משימות']].sort_values('ממוצע משימות')
+        d_s = df_lat_sup[df_lat_sup['תחום'] == 'מדעים'][['סמל מוסד', 'מוסד', 'ממוצע משימות']].sort_values('ממוצע משימות', ascending=False)
         if not d_s.empty: st.dataframe(d_s.style.apply(style_row, domain='מדעים', axis=1), use_container_width=True, hide_index=True)
 
     st.divider()
 
     # --- רובריקה 3: התערבות דחופה ---
-    st.header("🚨 מוקדי התערבות דחופים")
+    st.header("מוקדי התערבות דחופים (ללא קורסים)")
     if not df_urg_dist.empty:
         df_urg_sup = df_urg_dist[df_urg_dist['שם מפקח'] == supervisor]
         if not df_urg_sup.empty:
             df_urg_unique = df_urg_sup[['סמל מוסד', 'מוסד', 'תחום']].sort_values('תחום')
-            st.warning(f"המפקח/ת {supervisor} אחראי/ת על {len(df_urg_unique)} מוסדות שטרם פתחו קורסי מודל.")
+            st.error(f"⚠️ שימו לב: נמצאו {len(df_urg_unique)} מוסדות באחריות מפקח/ת זה שבהם טרם נפתחו קורסי מודל כלל (על פי קבצי התפעולי).")
             st.dataframe(df_urg_unique, hide_index=True, use_container_width=True)
         else:
-            st.success("אין מוסדות ללא קורסים באחריות מפקח זה. מצוין!")
+            st.success("לא נמצאו מוסדות ללא קורסים באחריות מפקח/ת זה.")
     else:
-        st.info("קובץ תפעולי לא הניב תוצאות חריגות (כל בתי הספר פתחו קורסים).")
+        st.success("לא נמצאו נתונים אודות מוסדות ללא קורסים מקבצי התפעולי באזור זה.")
 
     st.divider()
 
     # --- רובריקה 4: חקר ביצועים רמת בית ספר ---
-    st.header("🏫 מגמות ברמת מוסד")
+    st.header("ניתוח עומק ברמת מוסד (Micro Analysis)")
     if not df_hist_sup.empty:
         schools = sorted(df_hist_sup['מוסד'].dropna().unique())
         selected_school = st.selectbox("בחר/י מוסד לבחינת מגמת שיפור אישית:", schools)
@@ -234,14 +280,17 @@ if supervisor:
         if selected_school:
             df_school = df_hist_sup[df_hist_sup['מוסד'] == selected_school].sort_values('תקופה')
             
-            if df_school['תקופה'].nunique() > 1 and not has_progress(df_school):
-                st.warning("לא בוצעה שום פעילות מ16.03")
+            status_sch = get_progress_status(df_school)
+            if status_sch == "SINGLE_POINT":
+                st.info("קיימת רק נקודת זמן אחת למוסד זה. ברגע שתעלי קבצים נוספים בעתיד, יופיע כאן קו מגמה.")
+            elif status_sch == "NO_PROGRESS":
+                st.warning("לא בוצעה שום פעילות מ16.03") # הטקסט המדויק לבית ספר
             else:
                 fig_sch = px.line(df_school, x='תקופה', y='אחוז ביצוע מהיעד', color='תחום', markers=True,
-                                  title=f"📈 מעקב התקדמות יחסית - {selected_school}",
-                                  hover_data=['ממוצע משימות'],
+                                  title=f"מעקב התקדמות יחסית - {selected_school}",
+                                  hover_data={'ממוצע משימות': True, 'אחוז ביצוע מהיעד': ':.1f'},
                                   color_discrete_map=COLOR_MAP)
-                fig_sch.update_traces(mode='lines+markers')
-                fig_sch.update_layout(yaxis_title="אחוז ביצוע מהיעד (%)")
-                fig_sch.update_yaxes(matches=None, autorange=True) # משחרר את הציר כדי להבליט שינויים
+                fig_sch.update_traces(mode='lines+markers', line=dict(width=3), marker=dict(size=8))
+                fig_sch.update_layout(yaxis_title="אחוז ביצוע מהיעד (%)", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+                fig_sch.update_yaxes(matches=None, autorange=True, gridcolor='lightgrey')
                 st.plotly_chart(fig_sch, use_container_width=True)
